@@ -1,18 +1,26 @@
 import { Restaurant, FoodItem, Order } from '../types';
 
-const API_BASE = (import.meta as any).env?.VITE_API_BASE_URL 
-  ? `${(import.meta as any).env.VITE_API_BASE_URL.replace(/\/$/, '')}/api` 
-  : '/api';
+function getApiBase(): string {
+  const envUrl = (import.meta as any).env?.VITE_API_BASE_URL;
+  if (envUrl && envUrl.trim() !== '') {
+    return `${envUrl.replace(/\/$/, '')}/api`;
+  }
+  const storedUrl = typeof window !== 'undefined' ? localStorage.getItem('foodflow_backend_url') : null;
+  if (storedUrl && storedUrl.trim() !== '') {
+    return `${storedUrl.replace(/\/$/, '')}/api`;
+  }
+  return '/api';
+}
 
 export const api = {
   async getRestaurants(): Promise<Restaurant[]> {
-    const res = await fetch(`${API_BASE}/restaurants`);
+    const res = await fetch(`${getApiBase()}/restaurants`);
     if (!res.ok) throw new Error('Failed to fetch restaurants');
     return res.json();
   },
 
   async updateRestaurantStatus(id: string, isOpen: boolean): Promise<Restaurant> {
-    const res = await fetch(`${API_BASE}/restaurants/${id}/status`, {
+    const res = await fetch(`${getApiBase()}/restaurants/${id}/status`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ is_open: isOpen })
@@ -23,15 +31,15 @@ export const api = {
 
   async getFoodItems(restaurantId?: string): Promise<FoodItem[]> {
     const url = restaurantId 
-      ? `${API_BASE}/food-items?restaurantId=${restaurantId}`
-      : `${API_BASE}/food-items`;
+      ? `${getApiBase()}/food-items?restaurantId=${restaurantId}`
+      : `${getApiBase()}/food-items`;
     const res = await fetch(url);
     if (!res.ok) throw new Error('Failed to fetch food items');
     return res.json();
   },
 
   async createFoodItem(item: Partial<FoodItem>): Promise<FoodItem> {
-    const res = await fetch(`${API_BASE}/food-items`, {
+    const res = await fetch(`${getApiBase()}/food-items`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(item)
@@ -41,7 +49,7 @@ export const api = {
   },
 
   async updateFoodItem(id: string, item: Partial<FoodItem>): Promise<FoodItem> {
-    const res = await fetch(`${API_BASE}/food-items/${id}`, {
+    const res = await fetch(`${getApiBase()}/food-items/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(item)
@@ -51,7 +59,7 @@ export const api = {
   },
 
   async deleteFoodItem(id: string): Promise<{ success: boolean }> {
-    const res = await fetch(`${API_BASE}/food-items/${id}`, {
+    const res = await fetch(`${getApiBase()}/food-items/${id}`, {
       method: 'DELETE'
     });
     if (!res.ok) throw new Error('Failed to delete food item');
@@ -59,13 +67,13 @@ export const api = {
   },
 
   async getOrders(): Promise<Order[]> {
-    const res = await fetch(`${API_BASE}/orders`);
+    const res = await fetch(`${getApiBase()}/orders`);
     if (!res.ok) throw new Error('Failed to fetch orders');
     return res.json();
   },
 
   async updateOrderStatus(id: string, status: Order['status'], prepMinutes?: number): Promise<Order> {
-    const res = await fetch(`${API_BASE}/orders/${id}/status`, {
+    const res = await fetch(`${getApiBase()}/orders/${id}/status`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status, prepMinutes })
@@ -82,7 +90,7 @@ export const api = {
       reader.readAsDataURL(file);
     });
 
-    const res = await fetch(`${API_BASE}/upload`, {
+    const res = await fetch(`${getApiBase()}/upload`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
