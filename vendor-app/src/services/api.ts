@@ -72,5 +72,31 @@ export const api = {
     });
     if (!res.ok) throw new Error('Failed to update order status');
     return res.json();
+  },
+
+  async uploadImage(file: File): Promise<{ url: string; key?: string; bucket?: string; success: boolean }> {
+    const base64Data = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+
+    const res = await fetch(`${API_BASE}/upload`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        image: base64Data,
+        filename: file.name,
+        contentType: file.type
+      })
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Failed to upload image to Supabase Storage');
+    }
+
+    return res.json();
   }
 };

@@ -1,9 +1,86 @@
 import express, { Request, Response } from 'express';
+import { createClient } from '@supabase/supabase-js';
 import { db, initDatabase } from './db.js';
 import { telegramService, addBotMessage, getBotMessageHistory } from './telegram.js';
 import { getPingStats, getPingLogs, recordPing } from './ping.js';
 
 export const apiRouter = express.Router();
+
+// ----------------------------------------------------
+// SUPABASE STORAGE & FILE UPLOADS
+// ----------------------------------------------------
+apiRouter.post('/upload', async (req: Request, res: Response) => {
+  try {
+    const { image, filename, contentType } = req.body;
+    if (!image) {
+      return res.status(400).json({ error: 'No image data provided' });
+    }
+
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY;
+    const bucketName = 'food-delivery-assets';
+
+    if (supabaseUrl && supabaseKey) {
+      try {
+        const supabase = createClient(supabaseUrl, supabaseKey);
+
+        // Ensure the bucket exists
+        try {
+          const { data: buckets } = await supabase.storage.listBuckets();
+          if (!buckets?.some(b => b.name === bucketName)) {
+            await supabase.storage.createBucket(bucketName, { public: true });
+          }
+        } catch (bErr) {
+          // Ignore if bucket already exists
+        }
+
+        // Clean base64 string and build binary buffer
+        const base64Data = image.replace(/^data:image\/\w+;base64,/, '');
+        const buffer = Buffer.from(base64Data, 'base64');
+        const rawExt = contentType?.split('/')[1] || filename?.split('.').pop() || 'jpg';
+        const ext = rawExt.replace(/[^a-z0-9]/gi, '') || 'jpg';
+        const safeName = `menu-item-${Date.now()}-${Math.random().toString(36).substring(2, 7)}.${ext}`;
+
+        const { data, error } = await supabase.storage
+          .from(bucketName)
+          .upload(safeName, buffer, {
+            contentType: contentType || 'image/jpeg',
+            upsert: true
+          });
+
+        if (error) {
+          console.warn('Supabase storage upload error:', error.message);
+          throw error;
+        }
+
+        // Retrieve public URL
+        const { data: publicUrlData } = supabase.storage
+          .from(bucketName)
+          .getPublicUrl(safeName);
+
+        return res.json({
+          url: publicUrlData.publicUrl,
+          key: safeName,
+          bucket: bucketName,
+          success: true
+        });
+      } catch (sbErr: any) {
+        console.warn('Falling back to direct data URL due to Supabase Storage notice:', sbErr.message);
+      }
+    }
+
+    // Fallback: If Supabase Storage keys are not set in the environment, return the image data URL directly
+    return res.json({
+      url: image.startsWith('data:') ? image : `data:${contentType || 'image/jpeg'};base64,${image}`,
+      key: `local-${Date.now()}`,
+      bucket: 'local-memory',
+      success: true
+    });
+  } catch (err: any) {
+    console.error('Upload handler error:', err);
+    res.status(500).json({ error: err.message || 'Image upload failed' });
+  }
+});
 
 // ----------------------------------------------------
 // PING / HEALTH / RENDER KEEP-ALIVE ENDPOINTS
@@ -61,6 +138,16 @@ apiRouter.patch('/restaurants/:id', async (req: Request, res: Response) => {
   }
 });
 
+apiRouter.patch('/restaurants/:id/status', async (req: Request, res: Response) => {
+  try {
+    const { is_open } = req.body;
+    const updated = await db.updateRestaurant(req.params.id, { is_open: Boolean(is_open) });
+    res.json(updated);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 apiRouter.get('/categories', async (req: Request, res: Response) => {
   try {
     const categories = await db.getCategories();
@@ -70,9 +157,9 @@ apiRouter.get('/categories', async (req: Request, res: Response) => {
   }
 });
 
-apiRouter.get('/menu', async (req: Request, res: Response) => {
+apiRouter.get(['/menu', '/food-items'], async (req: Request, res: Response) => {
   try {
-    const restaurantId = req.query.restaurant_id ? String(req.query.restaurant_id) : undefined;
+    const restaurantId = req.query.restaurantId ? String(req.query.restaurantId) : (req.query.restaurant_id ? String(req.query.restaurant_id) : undefined);
     const items = await db.getFoodItems(restaurantId);
     res.json(items);
   } catch (err: any) {
@@ -80,7 +167,7 @@ apiRouter.get('/menu', async (req: Request, res: Response) => {
   }
 });
 
-apiRouter.post('/menu', async (req: Request, res: Response) => {
+apiRouter.post(['/menu', '/food-items'], async (req: Request, res: Response) => {
   try {
     const item = await db.createFoodItem(req.body);
     res.status(201).json(item);
@@ -89,7 +176,7 @@ apiRouter.post('/menu', async (req: Request, res: Response) => {
   }
 });
 
-apiRouter.put('/menu/:id', async (req: Request, res: Response) => {
+apiRouter.put(['/menu/:id', '/food-items/:id'], async (req: Request, res: Response) => {
   try {
     const updated = await db.updateFoodItem(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: 'Item not found' });
@@ -99,7 +186,7 @@ apiRouter.put('/menu/:id', async (req: Request, res: Response) => {
   }
 });
 
-apiRouter.delete('/menu/:id', async (req: Request, res: Response) => {
+apiRouter.delete(['/menu/:id', '/food-items/:id'], async (req: Request, res: Response) => {
   try {
     const success = await db.deleteFoodItem(req.params.id);
     res.json({ success });

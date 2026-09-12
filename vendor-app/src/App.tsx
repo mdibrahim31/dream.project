@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Restaurant, FoodItem, Order } from './types';
 import { api } from './services/api';
 import { 
@@ -16,7 +16,13 @@ import {
   Sparkles, 
   Check, 
   X,
-  ChefHat
+  ChefHat,
+  UploadCloud,
+  Image as ImageIcon,
+  Loader2,
+  CheckCircle,
+  AlertCircle,
+  Link
 } from 'lucide-react';
 
 export default function VendorApp() {
@@ -38,6 +44,44 @@ export default function VendorApp() {
   const [itemImageUrl, setItemImageUrl] = useState<string>('');
   const [itemIsAvailable, setItemIsAvailable] = useState<boolean>(true);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
+
+  // Supabase Storage File Upload States
+  const [isUploadingImage, setIsUploadingImage] = useState<boolean>(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState<boolean>(false);
+  const [showUrlInput, setShowUrlInput] = useState<boolean>(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleFileUpload = async (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      setUploadError('Please select a valid image file (PNG, JPG, WEBP)');
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setUploadError('Image size exceeds 10MB limit');
+      return;
+    }
+
+    try {
+      setIsUploadingImage(true);
+      setUploadError(null);
+      setUploadedFileName(file.name);
+
+      const result = await api.uploadImage(file);
+      if (result && result.url) {
+        setItemImageUrl(result.url);
+        setUploadError(null);
+      } else {
+        throw new Error('No URL returned from Supabase storage');
+      }
+    } catch (err: any) {
+      console.error('File upload error:', err);
+      setUploadError(err.message || 'Failed to upload image to Supabase Storage');
+    } finally {
+      setIsUploadingImage(false);
+    }
+  };
 
   const loadData = async (showLoading = true) => {
     try {
@@ -188,6 +232,9 @@ export default function VendorApp() {
     setItemDesc('');
     setItemImageUrl('');
     setItemIsAvailable(true);
+    setUploadError(null);
+    setUploadedFileName(null);
+    setShowUrlInput(false);
     setIsItemModalOpen(true);
   };
 
@@ -199,6 +246,9 @@ export default function VendorApp() {
     setItemDesc(item.description);
     setItemImageUrl(item.image_url);
     setItemIsAvailable(item.is_available);
+    setUploadError(null);
+    setUploadedFileName(null);
+    setShowUrlInput(false);
     setIsItemModalOpen(true);
   };
 
@@ -607,14 +657,137 @@ export default function VendorApp() {
               </div>
 
               <div>
-                <label className="text-slate-300 font-bold block mb-1">Photo Image URL</label>
-                <input
-                  type="url"
-                  placeholder="https://images.unsplash.com/..."
-                  value={itemImageUrl}
-                  onChange={(e) => setItemImageUrl(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
-                />
+                <label className="text-slate-300 font-bold block mb-1">Dish Photo (Supabase Storage)</label>
+                
+                {/* File Picker & Drag-and-Drop Area */}
+                <div className="space-y-2">
+                  <div
+                    onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                    onDragLeave={() => setIsDragging(false)}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setIsDragging(false);
+                      if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                        handleFileUpload(e.dataTransfer.files[0]);
+                      }
+                    }}
+                    onClick={() => {
+                      if (!isUploadingImage) {
+                        fileInputRef.current?.click();
+                      }
+                    }}
+                    className={`relative border-2 border-dashed rounded-2xl p-4 transition-all flex flex-col items-center justify-center text-center cursor-pointer ${
+                      isDragging
+                        ? 'border-amber-500 bg-amber-500/10'
+                        : itemImageUrl
+                        ? 'border-emerald-500/50 bg-slate-950/70 hover:border-emerald-400'
+                        : 'border-slate-800 bg-slate-950/60 hover:border-slate-700 hover:bg-slate-950'
+                    }`}
+                  >
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        if (e.target.files && e.target.files[0]) {
+                          handleFileUpload(e.target.files[0]);
+                        }
+                      }}
+                    />
+
+                    {isUploadingImage ? (
+                      <div className="py-3 flex flex-col items-center space-y-2">
+                        <Loader2 className="w-7 h-7 text-amber-400 animate-spin" />
+                        <div className="text-xs font-bold text-amber-300">
+                          Uploading to Supabase Storage bucket...
+                        </div>
+                        <span className="text-[10px] text-slate-400">
+                          Bucket: food-delivery-assets
+                        </span>
+                      </div>
+                    ) : itemImageUrl ? (
+                      <div className="w-full flex items-center justify-between gap-3">
+                        <div className="flex items-center space-x-3 text-left">
+                          <img
+                            src={itemImageUrl}
+                            alt="Dish Preview"
+                            referrerPolicy="no-referrer"
+                            className="w-14 h-14 rounded-xl object-cover border border-emerald-500/40 shadow-sm"
+                            onError={(e) => {
+                              (e.target as any).src = 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=600&q=80';
+                            }}
+                          />
+                          <div>
+                            <div className="flex items-center space-x-1.5 text-emerald-400 font-bold text-xs">
+                              <CheckCircle className="w-3.5 h-3.5" />
+                              <span>Uploaded to Supabase Storage</span>
+                            </div>
+                            <p className="text-[11px] text-slate-400 truncate max-w-[200px]">
+                              {uploadedFileName || 'Public image URL linked'}
+                            </p>
+                            <span className="text-[10px] text-amber-400 hover:underline">
+                              Click to change image
+                            </span>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setItemImageUrl('');
+                            setUploadedFileName(null);
+                          }}
+                          className="p-2 hover:bg-slate-800 text-slate-400 hover:text-rose-400 rounded-xl transition-colors"
+                          title="Remove image"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="py-2 flex flex-col items-center space-y-1.5">
+                        <div className="w-9 h-9 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center text-amber-400 shadow-inner">
+                          <UploadCloud className="w-4 h-4" />
+                        </div>
+                        <div className="text-xs text-slate-300">
+                          <span className="font-bold text-amber-400">Click to choose image</span> or drag & drop
+                        </div>
+                        <p className="text-[10px] text-slate-500">
+                          PNG, JPG, WEBP • Auto-uploads to Supabase Storage bucket
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  {uploadError && (
+                    <div className="flex items-center space-x-1.5 text-[11px] text-rose-400 bg-rose-950/40 border border-rose-800/50 p-2 rounded-xl">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      <span>{uploadError}</span>
+                    </div>
+                  )}
+
+                  {/* Fallback Option */}
+                  <div className="flex items-center justify-between text-[11px] pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setShowUrlInput(!showUrlInput)}
+                      className="text-slate-400 hover:text-amber-400 flex items-center space-x-1 underline decoration-dotted"
+                    >
+                      <Link className="w-3 h-3" />
+                      <span>{showUrlInput ? 'Hide manual image URL' : 'Or paste image URL manually'}</span>
+                    </button>
+                  </div>
+
+                  {showUrlInput && (
+                    <input
+                      type="url"
+                      placeholder="https://images.unsplash.com/..."
+                      value={itemImageUrl}
+                      onChange={(e) => setItemImageUrl(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
+                    />
+                  )}
+                </div>
               </div>
 
               <div>
