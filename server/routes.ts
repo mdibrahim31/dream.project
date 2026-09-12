@@ -16,30 +16,31 @@ apiRouter.post('/upload', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'No image data provided' });
     }
 
-    const supabaseUrl = process.env.SUPABASE_URL;
-    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY;
+    const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || process.env.SUPABASE_PROJECT_URL;
+    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
     const bucketName = 'food-delivery-assets';
 
     if (supabaseUrl && supabaseKey) {
       try {
-        const supabase = createClient(supabaseUrl, supabaseKey);
+        const cleanUrl = supabaseUrl.startsWith('http') ? supabaseUrl : `https://${supabaseUrl}`;
+        const supabase = createClient(cleanUrl, supabaseKey);
 
-        // Ensure the bucket exists
+        // Ensure the bucket exists with public access
         try {
           const { data: buckets } = await supabase.storage.listBuckets();
           if (!buckets?.some(b => b.name === bucketName)) {
             await supabase.storage.createBucket(bucketName, { public: true });
           }
         } catch (bErr) {
-          // Ignore if bucket already exists
+          // Ignore if bucket creation fails or already exists
         }
 
         // Clean base64 string and build binary buffer
-        const base64Data = image.replace(/^data:image\/\w+;base64,/, '');
+        const base64Data = image.includes(';base64,') ? image.split(';base64,')[1] : image.replace(/^data:image\/\w+;base64,/, '');
         const buffer = Buffer.from(base64Data, 'base64');
         const rawExt = contentType?.split('/')[1] || filename?.split('.').pop() || 'jpg';
         const ext = rawExt.replace(/[^a-z0-9]/gi, '') || 'jpg';
-        const safeName = `menu-item-${Date.now()}-${Math.random().toString(36).substring(2, 7)}.${ext}`;
+        const safeName = `dish-${Date.now()}-${Math.random().toString(36).substring(2, 8)}.${ext}`;
 
         const { data, error } = await supabase.storage
           .from(bucketName)
@@ -58,8 +59,10 @@ apiRouter.post('/upload', async (req: Request, res: Response) => {
           .from(bucketName)
           .getPublicUrl(safeName);
 
+        const finalUrl = publicUrlData?.publicUrl || `${cleanUrl}/storage/v1/object/public/${bucketName}/${safeName}`;
+
         return res.json({
-          url: publicUrlData.publicUrl,
+          url: finalUrl,
           key: safeName,
           bucket: bucketName,
           success: true
@@ -73,7 +76,7 @@ apiRouter.post('/upload', async (req: Request, res: Response) => {
     return res.json({
       url: image.startsWith('data:') ? image : `data:${contentType || 'image/jpeg'};base64,${image}`,
       key: `local-${Date.now()}`,
-      bucket: 'local-memory',
+      bucket: 'food-delivery-assets',
       success: true
     });
   } catch (err: any) {
@@ -157,7 +160,7 @@ apiRouter.get('/categories', async (req: Request, res: Response) => {
   }
 });
 
-apiRouter.get(['/menu', '/food-items'], async (req: Request, res: Response) => {
+apiRouter.get(['/menu', '/food-items', '/menu-items', '/menu_items'], async (req: Request, res: Response) => {
   try {
     const restaurantId = req.query.restaurantId ? String(req.query.restaurantId) : (req.query.restaurant_id ? String(req.query.restaurant_id) : undefined);
     const items = await db.getFoodItems(restaurantId);
@@ -167,7 +170,7 @@ apiRouter.get(['/menu', '/food-items'], async (req: Request, res: Response) => {
   }
 });
 
-apiRouter.post(['/menu', '/food-items'], async (req: Request, res: Response) => {
+apiRouter.post(['/menu', '/food-items', '/menu-items', '/menu_items'], async (req: Request, res: Response) => {
   try {
     const item = await db.createFoodItem(req.body);
     res.status(201).json(item);
@@ -176,7 +179,7 @@ apiRouter.post(['/menu', '/food-items'], async (req: Request, res: Response) => 
   }
 });
 
-apiRouter.put(['/menu/:id', '/food-items/:id'], async (req: Request, res: Response) => {
+apiRouter.put(['/menu/:id', '/food-items/:id', '/menu-items/:id', '/menu_items/:id'], async (req: Request, res: Response) => {
   try {
     const updated = await db.updateFoodItem(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: 'Item not found' });
@@ -186,7 +189,7 @@ apiRouter.put(['/menu/:id', '/food-items/:id'], async (req: Request, res: Respon
   }
 });
 
-apiRouter.delete(['/menu/:id', '/food-items/:id'], async (req: Request, res: Response) => {
+apiRouter.delete(['/menu/:id', '/food-items/:id', '/menu-items/:id', '/menu_items/:id'], async (req: Request, res: Response) => {
   try {
     const success = await db.deleteFoodItem(req.params.id);
     res.json({ success });

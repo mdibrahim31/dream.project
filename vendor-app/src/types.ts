@@ -18,6 +18,8 @@ export interface Restaurant {
 export interface FoodItem {
   id: string;
   restaurant_id: string;
+  restaurant_name?: string;
+  vendor_name?: string;
   name: string;
   description: string;
   price: number;

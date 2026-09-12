@@ -291,14 +291,8 @@ export const telegramService = {
     const cleanText = text.trim().toLowerCase();
 
     if (botType === 'rider') {
-      if (cleanText === '/start' || cleanText === 'hi' || cleanText === 'hello') {
-        const replyText = `👋 <b>Welcome to FoodFlow Rider Bot!</b>\n\n` +
-          `You are connected to the delivery dispatch network.\n\n` +
-          `<b>Commands:</b>\n` +
-          `• <code>/online</code> - Go online to receive order alerts\n` +
-          `• <code>/offline</code> - Pause deliveries\n` +
-          `• <code>/orders</code> - Check active assignments\n` +
-          `• <code>/earnings</code> - Check today's earnings & stats`;
+      if (cleanText === '/start') {
+        const replyText = `Welcome to our future`;
 
         const buttons = [
           [
@@ -311,12 +305,29 @@ export const telegramService = {
           ]
         ];
 
+        const token = process.env.TELEGRAM_RIDER_BOT_TOKEN;
+        if (token && userId && !userId.startsWith('user-sim')) {
+          sendRealTelegramMessage(token, userId, replyText, {
+            inline_keyboard: buttons.map(row => row.map(b => ({ text: b.text, callback_data: b.callbackData })))
+          }).catch(() => {});
+        }
+
         return addBotMessage({
           botType: 'rider',
           chatId: userId,
           sender: 'bot',
           text: replyText,
           inlineButtons: buttons
+        });
+      }
+
+      if (cleanText === 'hi' || cleanText === 'hello') {
+        const replyText = `Welcome to our future`;
+        return addBotMessage({
+          botType: 'rider',
+          chatId: userId,
+          sender: 'bot',
+          text: replyText
         });
       }
 

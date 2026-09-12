@@ -36,6 +36,8 @@ export interface Category {
 export interface FoodItem {
   id: string;
   restaurant_id: string;
+  restaurant_name?: string;
+  vendor_name?: string;
   name: string;
   description: string;
   price: number;
@@ -43,7 +45,10 @@ export interface FoodItem {
   image_url: string;
   is_available: boolean;
   is_popular?: boolean;
+  created_at?: string;
 }
+
+export type MenuItem = FoodItem;
 
 export interface OrderItem {
   food_id: string;
@@ -376,6 +381,8 @@ CREATE TABLE IF NOT EXISTS categories (
 CREATE TABLE IF NOT EXISTS food_items (
   id VARCHAR(64) PRIMARY KEY,
   restaurant_id VARCHAR(64) REFERENCES restaurants(id) ON DELETE CASCADE,
+  restaurant_name VARCHAR(255),
+  vendor_name VARCHAR(255),
   name VARCHAR(255) NOT NULL,
   description TEXT,
   price NUMERIC(10, 2) NOT NULL,
@@ -385,6 +392,27 @@ CREATE TABLE IF NOT EXISTS food_items (
   is_popular BOOLEAN DEFAULT false,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS menu_items (
+  id VARCHAR(64) PRIMARY KEY,
+  restaurant_id VARCHAR(64) REFERENCES restaurants(id) ON DELETE CASCADE,
+  restaurant_name VARCHAR(255),
+  vendor_name VARCHAR(255),
+  name VARCHAR(255) NOT NULL,
+  description TEXT,
+  price NUMERIC(10, 2) NOT NULL,
+  category VARCHAR(100),
+  image_url TEXT,
+  is_available BOOLEAN DEFAULT true,
+  is_popular BOOLEAN DEFAULT false,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Ensure columns exist if table was previously created
+ALTER TABLE food_items ADD COLUMN IF NOT EXISTS restaurant_name VARCHAR(255);
+ALTER TABLE food_items ADD COLUMN IF NOT EXISTS vendor_name VARCHAR(255);
+ALTER TABLE menu_items ADD COLUMN IF NOT EXISTS restaurant_name VARCHAR(255);
+ALTER TABLE menu_items ADD COLUMN IF NOT EXISTS vendor_name VARCHAR(255);
 
 CREATE TABLE IF NOT EXISTS riders (
   id VARCHAR(64) PRIMARY KEY,
@@ -627,7 +655,7 @@ export const db = {
     return undefined;
   },
 
-  // Food Items
+  // Food Items / Menu Items
   async getFoodItems(restaurantId?: string): Promise<FoodItem[]> {
     if (isConnectedToPostgres && pool) {
       try {
@@ -636,7 +664,14 @@ export const db = {
           : 'SELECT * FROM food_items ORDER BY name ASC';
         const params = restaurantId ? [restaurantId] : [];
         const res = await pool.query(query, params);
-        return res.rows;
+        if (res.rows.length > 0) return res.rows;
+
+        // Fallback check on menu_items table if food_items was empty
+        const mQuery = restaurantId
+          ? 'SELECT * FROM menu_items WHERE restaurant_id = $1 ORDER BY is_popular DESC, name ASC'
+          : 'SELECT * FROM menu_items ORDER BY name ASC';
+        const mRes = await pool.query(mQuery, params);
+        return mRes.rows;
       } catch (err) {
         console.error('PG getFoodItems error:', err);
       }
@@ -648,18 +683,38 @@ export const db = {
   },
 
   async createFoodItem(item: Omit<FoodItem, 'id'>): Promise<FoodItem> {
+    const restaurant = await this.getRestaurantById(item.restaurant_id);
+    const restName = item.restaurant_name || restaurant?.name || 'Partner Kitchen';
+    const vendorName = item.vendor_name || restName;
+
     const newItem: FoodItem = {
       ...item,
-      id: `food-${Date.now()}`
+      id: `food-${Date.now()}`,
+      restaurant_name: restName,
+      vendor_name: vendorName
     };
 
     if (isConnectedToPostgres && pool) {
       try {
+        // Insert into food_items
         await pool.query(
-          `INSERT INTO food_items (id, restaurant_id, name, description, price, category, image_url, is_available, is_popular)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-          [newItem.id, newItem.restaurant_id, newItem.name, newItem.description, newItem.price, newItem.category, newItem.image_url, newItem.is_available, newItem.is_popular || false]
+          `INSERT INTO food_items (id, restaurant_id, restaurant_name, vendor_name, name, description, price, category, image_url, is_available, is_popular)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+          [newItem.id, newItem.restaurant_id, newItem.restaurant_name, newItem.vendor_name, newItem.name, newItem.description, newItem.price, newItem.category, newItem.image_url, newItem.is_available, newItem.is_popular || false]
         );
+
+        // Also insert into menu_items table
+        try {
+          await pool.query(
+            `INSERT INTO menu_items (id, restaurant_id, restaurant_name, vendor_name, name, description, price, category, image_url, is_available, is_popular)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+             ON CONFLICT (id) DO UPDATE SET name=$5, price=$7, image_url=$9, is_available=$10`,
+            [newItem.id, newItem.restaurant_id, newItem.restaurant_name, newItem.vendor_name, newItem.name, newItem.description, newItem.price, newItem.category, newItem.image_url, newItem.is_available, newItem.is_popular || false]
+          );
+        } catch (mErr) {
+          // ignore duplicate
+        }
+
         return newItem;
       } catch (err) {
         console.error('PG createFoodItem error:', err);
@@ -674,13 +729,26 @@ export const db = {
     if (isConnectedToPostgres && pool) {
       try {
         const res = await pool.query('SELECT * FROM food_items WHERE id = $1', [id]);
-        if (res.rows.length === 0) return undefined;
-        const current = res.rows[0];
+        let current = res.rows[0];
+        if (!current) {
+          const mRes = await pool.query('SELECT * FROM menu_items WHERE id = $1', [id]);
+          current = mRes.rows[0];
+        }
+        if (!current) return undefined;
+
         const updated = { ...current, ...updates };
         await pool.query(
-          `UPDATE food_items SET name=$1, description=$2, price=$3, category=$4, image_url=$5, is_available=$6, is_popular=$7 WHERE id=$8`,
-          [updated.name, updated.description, updated.price, updated.category, updated.image_url, updated.is_available, updated.is_popular, id]
+          `UPDATE food_items SET name=$1, description=$2, price=$3, category=$4, image_url=$5, is_available=$6, is_popular=$7, restaurant_name=$8, vendor_name=$9 WHERE id=$10`,
+          [updated.name, updated.description, updated.price, updated.category, updated.image_url, updated.is_available, updated.is_popular, updated.restaurant_name || null, updated.vendor_name || null, id]
         );
+
+        try {
+          await pool.query(
+            `UPDATE menu_items SET name=$1, description=$2, price=$3, category=$4, image_url=$5, is_available=$6, is_popular=$7, restaurant_name=$8, vendor_name=$9 WHERE id=$10`,
+            [updated.name, updated.description, updated.price, updated.category, updated.image_url, updated.is_available, updated.is_popular, updated.restaurant_name || null, updated.vendor_name || null, id]
+          );
+        } catch (mErr) {}
+
         return updated;
       } catch (err) {
         console.error('PG updateFoodItem error:', err);
@@ -699,6 +767,9 @@ export const db = {
     if (isConnectedToPostgres && pool) {
       try {
         await pool.query('DELETE FROM food_items WHERE id = $1', [id]);
+        try {
+          await pool.query('DELETE FROM menu_items WHERE id = $1', [id]);
+        } catch (e) {}
         return true;
       } catch (err) {
         console.error('PG deleteFoodItem error:', err);
