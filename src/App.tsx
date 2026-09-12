@@ -8,13 +8,72 @@ import { TelegramBotSimulator } from './components/TelegramBotSimulator';
 import { PingStatusModal } from './components/PingStatusModal';
 import { api } from './services/api';
 
+// Helper to determine view from URL path
+function getViewFromPath(pathname: string): PortalView {
+  const path = pathname.toLowerCase();
+  if (path.startsWith('/vendor')) return 'vendor';
+  if (path.startsWith('/admin')) return 'admin';
+  if (path.startsWith('/bots') || path.startsWith('/telegram')) return 'telegram-bots';
+  return 'customer';
+}
+
+function getPathFromView(view: PortalView): string {
+  switch (view) {
+    case 'vendor': return '/vendor';
+    case 'admin': return '/admin';
+    case 'telegram-bots': return '/bots';
+    case 'customer':
+    default: return '/';
+  }
+}
+
+function getPageTitle(view: PortalView): string {
+  switch (view) {
+    case 'vendor': return 'FoodFlow Partner | Vendor Kitchen Portal';
+    case 'admin': return 'FoodFlow Master | Platform Super Admin';
+    case 'telegram-bots': return 'FoodFlow Bots | Telegram Dispatch Network';
+    case 'customer':
+    default: return 'FoodFlow | Online Food Delivery';
+  }
+}
+
 export default function App() {
-  const [currentView, setCurrentView] = useState<PortalView>('customer');
+  const [currentView, setCurrentView] = useState<PortalView>(() => {
+    if (typeof window !== 'undefined') {
+      return getViewFromPath(window.location.pathname);
+    }
+    return 'customer';
+  });
+
   const [cart, setCart] = useState<CartItem[]>([]);
   const [isCartOpen, setIsCartOpen] = useState<boolean>(false);
   const [isPingModalOpen, setIsPingModalOpen] = useState<boolean>(false);
   const [orders, setOrders] = useState<Order[]>([]);
   const [dbStatus, setDbStatus] = useState<any>(null);
+
+  // Sync view with browser back/forward buttons
+  useEffect(() => {
+    const handlePopState = () => {
+      const view = getViewFromPath(window.location.pathname);
+      setCurrentView(view);
+      document.title = getPageTitle(view);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    document.title = getPageTitle(currentView);
+
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  // Handler to switch view and update browser URL
+  const handleViewChange = (newView: PortalView) => {
+    setCurrentView(newView);
+    const newPath = getPathFromView(newView);
+    if (window.location.pathname !== newPath) {
+      window.history.pushState(null, '', newPath);
+    }
+    document.title = getPageTitle(newView);
+  };
 
   const fetchGlobalState = async () => {
     try {
@@ -31,7 +90,7 @@ export default function App() {
 
   useEffect(() => {
     fetchGlobalState();
-    const interval = setInterval(fetchGlobalState, 5000);
+    const interval = setInterval(fetchGlobalState, 4000);
     return () => clearInterval(interval);
   }, []);
 
@@ -45,10 +104,10 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 selection:bg-amber-500 selection:text-slate-950">
       
-      {/* Top Navigation & Portal Switcher Bar */}
+      {/* Universal Website Switcher & Multi-Website Hub Bar */}
       <Navbar
         currentView={currentView}
-        onViewChange={setCurrentView}
+        onViewChange={handleViewChange}
         cartCount={totalCartItemsCount}
         onOpenCart={() => setIsCartOpen(true)}
         onOpenPingModal={() => setIsPingModalOpen(true)}
@@ -56,12 +115,12 @@ export default function App() {
         activeOrdersCount={activeOrdersCount}
       />
 
-      {/* Render Selected Portal */}
+      {/* Render Selected Portal Website */}
       <main>
         {currentView === 'customer' && (
           <CustomerPortal
-            onOpenBots={() => setCurrentView('telegram-bots')}
-            onOpenVendor={() => setCurrentView('vendor')}
+            onOpenBots={() => handleViewChange('telegram-bots')}
+            onOpenVendor={() => handleViewChange('vendor')}
             cart={cart}
             setCart={setCart}
             isCartOpen={isCartOpen}
@@ -72,21 +131,21 @@ export default function App() {
 
         {currentView === 'vendor' && (
           <VendorPortal
-            onOpenBots={() => setCurrentView('telegram-bots')}
+            onOpenBots={() => handleViewChange('telegram-bots')}
           />
         )}
 
         {currentView === 'admin' && (
           <AdminPortal
-            onOpenBots={() => setCurrentView('telegram-bots')}
+            onOpenBots={() => handleViewChange('telegram-bots')}
             onOpenPingModal={() => setIsPingModalOpen(true)}
           />
         )}
 
         {currentView === 'telegram-bots' && (
           <TelegramBotSimulator
-            onOpenCustomer={() => setCurrentView('customer')}
-            onOpenVendor={() => setCurrentView('vendor')}
+            onOpenCustomer={() => handleViewChange('customer')}
+            onOpenVendor={() => handleViewChange('vendor')}
           />
         )}
       </main>

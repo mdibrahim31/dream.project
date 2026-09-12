@@ -65,9 +65,9 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
   const [isPlacingOrder, setIsPlacingOrder] = useState<boolean>(false);
   const [orderSuccessMsg, setOrderSuccessMsg] = useState<string | null>(null);
 
-  const loadData = async () => {
+  const loadData = async (showLoadingState = true) => {
     try {
-      setIsLoading(true);
+      if (showLoadingState) setIsLoading(true);
       const [resList, catList, menuList, ordersList] = await Promise.all([
         api.getRestaurants(),
         api.getCategories(),
@@ -80,28 +80,23 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
       setActiveOrders(ordersList);
       if (ordersList.length > 0 && !selectedOrder) {
         setSelectedOrder(ordersList[0]);
+      } else if (selectedOrder) {
+        const updated = ordersList.find(o => o.id === selectedOrder.id);
+        if (updated) setSelectedOrder(updated);
       }
     } catch (err) {
       console.error('Failed to load customer data:', err);
     } finally {
-      setIsLoading(false);
+      if (showLoadingState) setIsLoading(false);
     }
   };
 
   useEffect(() => {
-    loadData();
-    const interval = setInterval(async () => {
-      try {
-        const orders = await api.getOrders();
-        setActiveOrders(orders);
-        if (selectedOrder) {
-          const updated = orders.find(o => o.id === selectedOrder.id);
-          if (updated) setSelectedOrder(updated);
-        }
-      } catch (e) {
-        // silent
-      }
-    }, 4000);
+    loadData(true);
+    // Background live sync from same Supabase/PostgreSQL database
+    const interval = setInterval(() => {
+      loadData(false);
+    }, 3500);
     return () => clearInterval(interval);
   }, [selectedOrder?.id]);
 
