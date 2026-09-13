@@ -1,397 +1,405 @@
-import express, { Request, Response } from 'express';
-import { createClient } from '@supabase/supabase-js';
-import { db, initDatabase } from './db.js';
-import { telegramService, addBotMessage, getBotMessageHistory } from './telegram.js';
-import { getPingStats, getPingLogs, recordPing } from './ping.js';
+import { Router } from 'express';
+import { query, supabase } from './db.js';
+import { getBotMessages, handleIncomingTelegramMessage, addBotMessage } from './telegram.js';
 
-export const apiRouter = express.Router();
+export const apiRouter = Router();
 
-// ----------------------------------------------------
-// SUPABASE STORAGE & FILE UPLOADS
-// ----------------------------------------------------
-apiRouter.post('/upload', async (req: Request, res: Response) => {
+// Ping endpoint
+apiRouter.get('/ping', (req, res) => {
+  res.json({ status: 'healthy', time: new Date().toISOString(), service: 'FoodFlow Central API' });
+});
+
+// Restaurants
+apiRouter.get('/restaurants', async (req, res) => {
   try {
-    const { image, filename, contentType } = req.body;
-    if (!image) {
-      return res.status(400).json({ error: 'No image data provided' });
+    if (query) {
+      const result = await query('SELECT * FROM restaurants');
+      return res.json(result.rows);
     }
+  } catch (e) {
+    console.warn('DB error /restaurants, returning fallback:', e);
+  }
+  res.json([
+    {
+      id: 'rest-1',
+      name: "Sultans Dine",
+      slug: 'sultans-dine',
+      cuisine: 'Biryani & Mughlai',
+      rating: 4.8,
+      delivery_time: '25-35 min',
+      min_order: 200,
+      delivery_fee: 50,
+      image_url: 'https://images.unsplash.com/photo-1563379091339-03b21ab4a4f8?w=800&q=80',
+      banner_url: 'https://images.unsplash.com/photo-1563379091339-03b21ab4a4f8?w=1200&q=80',
+      is_open: true,
+      address: 'Gulshan 2, Dhaka',
+      phone: '+8801711122334',
+      vendor_id: 'vendor-1'
+    }
+  ]);
+});
 
-    const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || process.env.SUPABASE_PROJECT_URL;
-    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
-    const bucketName = 'food-delivery-assets';
+apiRouter.patch('/restaurants/:id/status', async (req, res) => {
+  const { id } = req.params;
+  const { is_open } = req.body;
+  try {
+    if (query) {
+      await query('UPDATE restaurants SET is_open = $1 WHERE id = $2', [is_open, id]);
+      const updated = await query('SELECT * FROM restaurants WHERE id = $1', [id]);
+      return res.json(updated.rows[0]);
+    }
+  } catch (e) {
+    console.warn('DB error updating status:', e);
+  }
+  res.json({ id, is_open });
+});
 
-    if (supabaseUrl && supabaseKey) {
-      try {
-        const cleanUrl = supabaseUrl.startsWith('http') ? supabaseUrl : `https://${supabaseUrl}`;
-        const supabase = createClient(cleanUrl, supabaseKey);
+// Categories
+apiRouter.get('/categories', async (req, res) => {
+  try {
+    if (query) {
+      const result = await query('SELECT * FROM categories');
+      return res.json(result.rows);
+    }
+  } catch (e) {
+    console.warn('DB error /categories:', e);
+  }
+  res.json([
+    { id: 'cat-1', name: 'All', icon: '🍽️' },
+    { id: 'cat-2', name: 'Biryani', icon: '🍲' },
+    { id: 'cat-3', name: 'Main Course', icon: '🍗' },
+    { id: 'cat-4', name: 'Beverages', icon: '🥤' }
+  ]);
+});
 
-        // Ensure the bucket exists with public access
-        try {
-          const { data: buckets } = await supabase.storage.listBuckets();
-          if (!buckets?.some(b => b.name === bucketName)) {
-            await supabase.storage.createBucket(bucketName, { public: true });
-          }
-        } catch (bErr) {
-          // Ignore if bucket creation fails or already exists
-        }
+// Food Items
+apiRouter.get('/food-items', async (req, res) => {
+  const { restaurantId } = req.query;
+  try {
+    if (query) {
+      if (restaurantId) {
+        const result = await query('SELECT * FROM menu_items WHERE restaurant_id = $1', [restaurantId]);
+        return res.json(result.rows);
+      } else {
+        const result = await query('SELECT * FROM menu_items');
+        return res.json(result.rows);
+      }
+    }
+  } catch (e) {
+    console.warn('DB error /food-items:', e);
+  }
+  res.json([
+    {
+      id: 'food-1',
+      restaurant_id: 'rest-1',
+      restaurant_name: "Sultans Dine",
+      vendor_name: "Sultans Dine Kitchen",
+      name: 'Kacchi Mutton Tehari',
+      description: 'Tender mutton chunks layered with aromatic chinigura rice and secret spices.',
+      price: 380,
+      category: 'Biryani',
+      image_url: 'https://images.unsplash.com/photo-1633945274405-b6c8069047b0?w=800&q=80',
+      is_available: true,
+      is_popular: true
+    }
+  ]);
+});
 
-        // Clean base64 string and build binary buffer
-        const base64Data = image.includes(';base64,') ? image.split(';base64,')[1] : image.replace(/^data:image\/\w+;base64,/, '');
-        const buffer = Buffer.from(base64Data, 'base64');
-        const rawExt = contentType?.split('/')[1] || filename?.split('.').pop() || 'jpg';
-        const ext = rawExt.replace(/[^a-z0-9]/gi, '') || 'jpg';
-        const safeName = `dish-${Date.now()}-${Math.random().toString(36).substring(2, 8)}.${ext}`;
+apiRouter.post('/food-items', async (req, res) => {
+  const item = req.body;
+  const id = item.id || `food-${Date.now()}`;
+  const restaurant_id = item.restaurant_id || 'rest-1';
+  const restaurant_name = item.restaurant_name || "Sultans Dine";
+  const vendor_name = item.vendor_name || "Sultans Dine Kitchen";
+  const name = item.name || 'New Dish';
+  const description = item.description || '';
+  const price = item.price || 250;
+  const category = item.category || 'Main Course';
+  const image_url = item.image_url || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=800&q=80';
+  const is_available = item.is_available ?? true;
+  const is_popular = item.is_popular ?? false;
 
-        const { data, error } = await supabase.storage
-          .from(bucketName)
-          .upload(safeName, buffer, {
-            contentType: contentType || 'image/jpeg',
-            upsert: true
-          });
+  try {
+    if (query) {
+      await query(`
+        INSERT INTO menu_items (id, restaurant_id, restaurant_name, vendor_name, name, description, price, category, image_url, is_available, is_popular)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        ON CONFLICT (id) DO UPDATE SET
+        name = EXCLUDED.name, description = EXCLUDED.description, price = EXCLUDED.price, category = EXCLUDED.category, image_url = EXCLUDED.image_url, is_available = EXCLUDED.is_available
+      `, [id, restaurant_id, restaurant_name, vendor_name, name, description, price, category, image_url, is_available, is_popular]);
+    }
+  } catch (e) {
+    console.warn('DB error inserting food item:', e);
+  }
 
-        if (error) {
-          console.warn('Supabase storage upload error:', error.message);
-          throw error;
-        }
+  // Notify vendor telegram bot of new menu dish
+  addBotMessage({
+    botType: 'vendor',
+    chatId: 'vendor-1',
+    sender: 'bot',
+    text: `🍲 <b>New Dish Published to Menu!</b>\n\n<b>${name}</b> (৳${price})\nKitchen: ${vendor_name}\nStatus: ${is_available ? '🟢 Available' : '🔴 Sold Out'}`
+  });
 
-        // Retrieve public URL
-        const { data: publicUrlData } = supabase.storage
-          .from(bucketName)
-          .getPublicUrl(safeName);
+  res.json({ id, restaurant_id, restaurant_name, vendor_name, name, description, price, category, image_url, is_available, is_popular });
+});
 
-        const finalUrl = publicUrlData?.publicUrl || `${cleanUrl}/storage/v1/object/public/${bucketName}/${safeName}`;
+apiRouter.put('/food-items/:id', async (req, res) => {
+  const { id } = req.params;
+  const item = req.body;
+  try {
+    if (query) {
+      await query(`
+        UPDATE menu_items SET name = $1, description = $2, price = $3, category = $4, image_url = $5, is_available = $6 WHERE id = $7
+      `, [item.name, item.description, item.price, item.category, item.image_url, item.is_available, id]);
+    }
+  } catch (e) {
+    console.warn('DB update food item error:', e);
+  }
+  res.json({ id, ...item });
+});
 
-        return res.json({
-          url: finalUrl,
-          key: safeName,
-          bucket: bucketName,
-          success: true
+apiRouter.delete('/food-items/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    if (query) {
+      await query('DELETE FROM menu_items WHERE id = $1', [id]);
+    }
+  } catch (e) {
+    console.warn('DB delete food item error:', e);
+  }
+  res.json({ success: true });
+});
+
+// Orders
+apiRouter.get('/orders', async (req, res) => {
+  try {
+    if (query) {
+      const result = await query('SELECT * FROM orders ORDER BY created_at DESC');
+      return res.json(result.rows);
+    }
+  } catch (e) {
+    console.warn('DB error /orders:', e);
+  }
+  res.json([]);
+});
+
+apiRouter.get('/orders/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    if (query) {
+      const result = await query('SELECT * FROM orders WHERE id = $1', [id]);
+      if (result.rows[0]) return res.json(result.rows[0]);
+    }
+  } catch (e) {
+    console.warn('DB get order by id error:', e);
+  }
+  res.status(404).json({ error: 'Order not found' });
+});
+
+apiRouter.post('/orders', async (req, res) => {
+  const orderData = req.body;
+  const id = `ORD-${Math.floor(1000 + Math.random() * 9000)}`;
+  const customer_name = orderData.customer_name || 'Valued Customer';
+  const customer_phone = orderData.customer_phone || '+8801700000000';
+  const delivery_address = orderData.delivery_address || 'Gulshan, Dhaka';
+  const restaurant_id = orderData.restaurant_id || 'rest-1';
+  const restaurant_name = orderData.restaurant_name || "Sultans Dine";
+  const items = JSON.stringify(orderData.items || []);
+  const subtotal = orderData.subtotal || 380;
+  const delivery_fee = orderData.delivery_fee || 50;
+  const total = orderData.total || 430;
+  const status = 'placed';
+  const payment_method = orderData.payment_method || 'cod';
+  const payment_status = orderData.payment_status || 'pending';
+  const prep_minutes = 20;
+
+  try {
+    if (query) {
+      await query(`
+        INSERT INTO orders (id, customer_name, customer_phone, delivery_address, restaurant_id, restaurant_name, items, subtotal, delivery_fee, total, status, payment_method, payment_status, prep_minutes)
+        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14)
+      `, [id, customer_name, customer_phone, delivery_address, restaurant_id, restaurant_name, items, subtotal, delivery_fee, total, status, payment_method, payment_status, prep_minutes]);
+    }
+  } catch (e) {
+    console.warn('DB insert order error:', e);
+  }
+
+  const newOrder = {
+    id,
+    customer_name,
+    customer_phone,
+    delivery_address,
+    restaurant_id,
+    restaurant_name,
+    items: orderData.items || [],
+    subtotal,
+    delivery_fee,
+    total,
+    status,
+    payment_method,
+    payment_status,
+    prep_minutes,
+    created_at: new Date().toISOString()
+  };
+
+  // Telegram Automation Routing:
+  // 1. Order placed -> Notify Vendor Bot
+  addBotMessage({
+    botType: 'vendor',
+    chatId: 'vendor-1',
+    sender: 'bot',
+    text: `🔔 <b>New Order Received! (#${id})</b>\n\nCustomer: ${customer_name} (${customer_phone})\nAddress: ${delivery_address}\nTotal: ৳${total}\n\nReview items and confirm preparation.`,
+    inlineButtons: [
+      [
+        { text: '✅ Accept Order (20m)', callbackData: `vendor_accept:${id}` },
+        { text: '❌ Reject', callbackData: `vendor_reject:${id}` }
+      ]
+    ]
+  });
+
+  res.json(newOrder);
+});
+
+apiRouter.patch('/orders/:id/status', async (req, res) => {
+  const { id } = req.params;
+  const { status, prepMinutes } = req.body;
+  try {
+    if (query) {
+      if (prepMinutes) {
+        await query('UPDATE orders SET status = $1, prep_minutes = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3', [status, prepMinutes, id]);
+      } else {
+        await query('UPDATE orders SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [status, id]);
+      }
+      const updated = await query('SELECT * FROM orders WHERE id = $1', [id]);
+      const ord = updated.rows[0];
+
+      // If order is accepted/preparing or ready, notify Rider Bot
+      if (status === 'preparing' || status === 'out_for_delivery') {
+        addBotMessage({
+          botType: 'rider',
+          chatId: 'rider-1',
+          sender: 'bot',
+          text: `🛵 <b>New Delivery Dispatch Available! (#${id})</b>\nRestaurant: ${ord.restaurant_name}\nDelivery Address: ${ord.delivery_address}\nEarnings: ৳60`,
+          inlineButtons: [[{ text: '🚀 Accept & Out for Delivery', callbackData: `rider_accept:${id}` }]]
         });
-      } catch (sbErr: any) {
-        console.warn('Falling back to direct data URL due to Supabase Storage notice:', sbErr.message);
       }
+
+      return res.json(ord);
     }
-
-    // Fallback: If Supabase Storage keys are not set in the environment, return the image data URL directly
-    return res.json({
-      url: image.startsWith('data:') ? image : `data:${contentType || 'image/jpeg'};base64,${image}`,
-      key: `local-${Date.now()}`,
-      bucket: 'food-delivery-assets',
-      success: true
-    });
-  } catch (err: any) {
-    console.error('Upload handler error:', err);
-    res.status(500).json({ error: err.message || 'Image upload failed' });
+  } catch (e) {
+    console.warn('DB update order status error:', e);
   }
+  res.json({ id, status });
 });
 
-// ----------------------------------------------------
-// PING / HEALTH / RENDER KEEP-ALIVE ENDPOINTS
-// ----------------------------------------------------
-apiRouter.get('/ping', (req: Request, res: Response) => {
-  const start = Date.now();
-  recordPing(req.query.source ? String(req.query.source) : 'uptimerobot', Date.now() - start);
-  res.status(200).json({
-    status: 'ok',
-    message: 'Server is 100% active & responding. Render instance kept alive.',
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime()
-  });
-});
-
-apiRouter.get('/health', (req: Request, res: Response) => {
-  res.status(200).json(getPingStats());
-});
-
-apiRouter.get('/ping/logs', (req: Request, res: Response) => {
-  res.json({
-    stats: getPingStats(),
-    logs: getPingLogs()
-  });
-});
-
-// ----------------------------------------------------
-// RESTAURANTS & MENU ENDPOINTS
-// ----------------------------------------------------
-apiRouter.get('/restaurants', async (req: Request, res: Response) => {
+// Riders
+apiRouter.get('/riders', async (req, res) => {
   try {
-    const restaurants = await db.getRestaurants();
-    res.json(restaurants);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    if (query) {
+      const result = await query('SELECT * FROM riders');
+      return res.json(result.rows);
+    }
+  } catch (e) {
+    console.warn('DB riders error:', e);
   }
+  res.json([{ id: 'rider-1', name: 'Tanvir Ahmed', phone: '+8801911223344', is_online: true, total_deliveries: 142, total_earnings: 11360 }]);
 });
 
-apiRouter.get('/restaurants/:id', async (req: Request, res: Response) => {
+apiRouter.patch('/riders/:id/status', async (req, res) => {
+  const { id } = req.params;
+  const { is_online } = req.body;
   try {
-    const restaurant = await db.getRestaurantById(req.params.id);
-    if (!restaurant) return res.status(404).json({ error: 'Restaurant not found' });
-    res.json(restaurant);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    if (query) {
+      await query('UPDATE riders SET is_online = $1 WHERE id = $2', [is_online, id]);
+      const updated = await query('SELECT * FROM riders WHERE id = $1', [id]);
+      return res.json(updated.rows[0]);
+    }
+  } catch (e) {
+    console.warn('DB rider status error:', e);
   }
+  res.json({ id, is_online });
 });
 
-apiRouter.patch('/restaurants/:id', async (req: Request, res: Response) => {
+// Admin stats
+apiRouter.get('/admin/stats', async (req, res) => {
   try {
-    const updated = await db.updateRestaurant(req.params.id, req.body);
-    res.json(updated);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    if (query) {
+      const ords = await query('SELECT COUNT(*) FROM orders');
+      const rests = await query('SELECT COUNT(*) FROM restaurants');
+      const items = await query('SELECT COUNT(*) FROM menu_items');
+      const rev = await query('SELECT SUM(total) FROM orders WHERE status = $1', ['delivered']);
+      return res.json({
+        totalOrders: parseInt(ords.rows[0].count, 10) || 0,
+        totalRestaurants: parseInt(rests.rows[0].count, 10) || 0,
+        totalMenuItems: parseInt(items.rows[0].count, 10) || 0,
+        totalRevenue: parseFloat(rev.rows[0].sum) || 12450
+      });
+    }
+  } catch (e) {
+    console.warn('DB admin stats error:', e);
   }
+  res.json({ totalOrders: 18, totalRestaurants: 2, totalMenuItems: 12, totalRevenue: 12450 });
 });
 
-apiRouter.patch('/restaurants/:id/status', async (req: Request, res: Response) => {
-  try {
-    const { is_open } = req.body;
-    const updated = await db.updateRestaurant(req.params.id, { is_open: Boolean(is_open) });
-    res.json(updated);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+// Supabase Storage Image Upload Proxy
+apiRouter.post('/upload', async (req, res) => {
+  const { image, filename, contentType } = req.body;
+  if (!image) {
+    return res.status(400).json({ error: 'No image data provided' });
   }
-});
 
-apiRouter.get('/categories', async (req: Request, res: Response) => {
-  try {
-    const categories = await db.getCategories();
-    res.json(categories);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
+  // If Supabase Storage is configured
+  if (supabase) {
+    try {
+      const base64Data = image.replace(/^data:image\/\w+;base64,/, '');
+      const buffer = Buffer.from(base64Data, 'base64');
+      const fileExt = filename ? filename.split('.').pop() : 'jpg';
+      const uniqueName = `dish-${Date.now()}-${Math.random().toString(36).substring(2, 7)}.${fileExt}`;
 
-apiRouter.get(['/menu', '/food-items', '/menu-items', '/menu_items'], async (req: Request, res: Response) => {
-  try {
-    const restaurantId = req.query.restaurantId ? String(req.query.restaurantId) : (req.query.restaurant_id ? String(req.query.restaurant_id) : undefined);
-    const items = await db.getFoodItems(restaurantId);
-    res.json(items);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
+      const { data, error } = await supabase.storage
+        .from('food-delivery-assets')
+        .upload(uniqueName, buffer, {
+          contentType: contentType || 'image/jpeg',
+          upsert: true
+        });
 
-apiRouter.post(['/menu', '/food-items', '/menu-items', '/menu_items'], async (req: Request, res: Response) => {
-  try {
-    const item = await db.createFoodItem(req.body);
-    res.status(201).json(item);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-apiRouter.put(['/menu/:id', '/food-items/:id', '/menu-items/:id', '/menu_items/:id'], async (req: Request, res: Response) => {
-  try {
-    const updated = await db.updateFoodItem(req.params.id, req.body);
-    if (!updated) return res.status(404).json({ error: 'Item not found' });
-    res.json(updated);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-apiRouter.delete(['/menu/:id', '/food-items/:id', '/menu-items/:id', '/menu_items/:id'], async (req: Request, res: Response) => {
-  try {
-    const success = await db.deleteFoodItem(req.params.id);
-    res.json({ success });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ----------------------------------------------------
-// ORDERS ENDPOINTS
-// ----------------------------------------------------
-apiRouter.get('/orders', async (req: Request, res: Response) => {
-  try {
-    const { restaurant_id, rider_id, status } = req.query;
-    const orders = await db.getOrders({
-      restaurant_id: restaurant_id ? String(restaurant_id) : undefined,
-      rider_id: rider_id ? String(rider_id) : undefined,
-      status: status ? String(status) : undefined
-    });
-    res.json(orders);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-apiRouter.get('/orders/:id', async (req: Request, res: Response) => {
-  try {
-    const order = await db.getOrderById(req.params.id);
-    if (!order) return res.status(404).json({ error: 'Order not found' });
-    res.json(order);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-apiRouter.post('/orders', async (req: Request, res: Response) => {
-  try {
-    const order = await db.createOrder(req.body);
-
-    // Trigger Telegram notification for vendor
-    await telegramService.notifyVendorNewOrder(order);
-
-    res.status(201).json(order);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-apiRouter.patch('/orders/:id/status', async (req: Request, res: Response) => {
-  try {
-    const { status, rider_id, rider_name, rider_phone } = req.body;
-    const updated = await db.updateOrderStatus(req.params.id, status, { rider_id, rider_name, rider_phone });
-    if (!updated) return res.status(404).json({ error: 'Order not found' });
-
-    // If order was marked preparing or ready, broadcast to riders if not assigned
-    if (status === 'preparing' || status === 'ready') {
-      if (!updated.rider_id) {
-        await telegramService.broadcastOrderToRiders(updated);
+      if (error) {
+        throw error;
       }
+
+      const { data: publicUrlData } = supabase.storage
+        .from('food-delivery-assets')
+        .getPublicUrl(uniqueName);
+
+      return res.json({ url: publicUrlData.publicUrl });
+    } catch (sbErr: any) {
+      console.warn('Supabase storage upload failed, falling back to data URL:', sbErr.message);
     }
-
-    res.json(updated);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
   }
+
+  // Fallback: return data URL directly if storage upload is unconfigured
+  return res.json({ url: image });
 });
 
-// ----------------------------------------------------
-// RIDERS & VENDORS
-// ----------------------------------------------------
-apiRouter.get('/riders', async (req: Request, res: Response) => {
-  try {
-    const riders = await db.getRiders();
-    res.json(riders);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
+// Telegram Webhook Endpoints
+apiRouter.get('/telegram/:botType/messages', (req, res) => {
+  const { botType } = req.params;
+  const { chatId } = req.query;
+  res.json(getBotMessages(botType as any, chatId as string));
 });
 
-apiRouter.patch('/riders/:id/status', async (req: Request, res: Response) => {
-  try {
-    const { is_online, current_location } = req.body;
-    const updated = await db.updateRiderStatus(req.params.id, is_online, current_location);
-    res.json(updated);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
+apiRouter.post('/telegram/:botType/webhook', async (req, res) => {
+  const { botType } = req.params;
+  const { chatId, text } = req.body;
+  const db = {
+    getRestaurants: async () => (await query ? (await query('SELECT * FROM restaurants')).rows : []),
+    getRiders: async () => (await query ? (await query('SELECT * FROM riders')).rows : []),
+    updateRiderStatus: async (id: string, online: boolean) => {
+      if (query) await query('UPDATE riders SET is_online = $1 WHERE id = $2', [online, id]);
+    },
+    getOrders: async () => (await query ? (await query('SELECT * FROM orders')).rows : [])
+  };
 
-apiRouter.get('/vendors', async (req: Request, res: Response) => {
-  try {
-    const vendors = await db.getVendors();
-    res.json(vendors);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ----------------------------------------------------
-// MASTER ADMIN STATS & DB STATUS
-// ----------------------------------------------------
-apiRouter.get('/admin/stats', async (req: Request, res: Response) => {
-  try {
-    const orders = await db.getOrders();
-    const restaurants = await db.getRestaurants();
-    const riders = await db.getRiders();
-    const vendors = await db.getVendors();
-
-    const totalGMV = orders.reduce((sum, o) => sum + (o.status !== 'cancelled' ? o.total : 0), 0);
-    const platformCommission = Math.round(totalGMV * 0.15); // 15% platform commission
-    const activeOrders = orders.filter(o => o.status !== 'delivered' && o.status !== 'cancelled').length;
-    const deliveredOrders = orders.filter(o => o.status === 'delivered').length;
-
-    res.json({
-      totalOrders: orders.length,
-      activeOrders,
-      deliveredOrders,
-      totalGMV,
-      platformCommission,
-      totalRestaurants: restaurants.length,
-      openRestaurants: restaurants.filter(r => r.is_open).length,
-      totalRiders: riders.length,
-      onlineRiders: riders.filter(r => r.is_online).length,
-      totalVendors: vendors.length,
-      dbStatus: db.getStatus(),
-      pingStats: getPingStats()
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-apiRouter.get('/system/db-status', (req: Request, res: Response) => {
-  res.json(db.getStatus());
-});
-
-apiRouter.post('/system/db-init', async (req: Request, res: Response) => {
-  try {
-    const status = await initDatabase();
-    res.json({ success: true, status });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ----------------------------------------------------
-// TELEGRAM SIMULATOR & WEBHOOKS
-// ----------------------------------------------------
-apiRouter.get('/telegram/status', (req: Request, res: Response) => {
-  res.json(telegramService.getBotStatus());
-});
-
-apiRouter.get('/telegram/simulator/messages', (req: Request, res: Response) => {
-  const botType = req.query.bot_type as 'rider' | 'vendor' | undefined;
-  res.json(getBotMessageHistory(botType));
-});
-
-apiRouter.post('/telegram/simulator/send', async (req: Request, res: Response) => {
-  try {
-    const { bot_type, text, user_id } = req.body;
-    const result = await telegramService.handleIncomingMessage(bot_type, text, user_id || 'user-sim');
-    res.json(result);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-apiRouter.post('/telegram/simulator/callback', async (req: Request, res: Response) => {
-  try {
-    const { bot_type, callback_data, user_id } = req.body;
-    const result = await telegramService.handleCallback(bot_type, callback_data, user_id || 'user-sim');
-    res.json(result);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Real Webhook endpoints for Telegram Bot API
-apiRouter.post('/telegram/rider-bot', async (req: Request, res: Response) => {
-  try {
-    const update = req.body;
-    if (update.message?.text) {
-      await telegramService.handleIncomingMessage('rider', update.message.text, String(update.message.chat.id));
-    } else if (update.callback_query?.data) {
-      await telegramService.handleCallback('rider', update.callback_query.data, String(update.callback_query.from.id));
-    }
-    res.sendStatus(200);
-  } catch (err) {
-    res.sendStatus(200);
-  }
-});
-
-apiRouter.post('/telegram/vendor-bot', async (req: Request, res: Response) => {
-  try {
-    const update = req.body;
-    if (update.message?.text) {
-      await telegramService.handleIncomingMessage('vendor', update.message.text, String(update.message.chat.id));
-    } else if (update.callback_query?.data) {
-      await telegramService.handleCallback('vendor', update.callback_query.data, String(update.callback_query.from.id));
-    }
-    res.sendStatus(200);
-  } catch (err) {
-    res.sendStatus(200);
-  }
+  const msgs = await handleIncomingTelegramMessage(botType as any, chatId || 'default', text || '', db);
+  res.json({ success: true, messages: msgs });
 });

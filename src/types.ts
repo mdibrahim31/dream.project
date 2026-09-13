@@ -1,5 +1,3 @@
-export type PortalView = 'customer' | 'vendor' | 'admin' | 'telegram-bots';
-
 export interface Restaurant {
   id: string;
   name: string;
@@ -14,7 +12,7 @@ export interface Restaurant {
   is_open: boolean;
   address: string;
   phone: string;
-  vendor_id?: string;
+  vendor_id: string;
 }
 
 export interface Category {
@@ -26,8 +24,8 @@ export interface Category {
 export interface FoodItem {
   id: string;
   restaurant_id: string;
-  restaurant_name?: string;
-  vendor_name?: string;
+  restaurant_name: string;
+  vendor_name: string;
   name: string;
   description: string;
   price: number;
@@ -37,18 +35,12 @@ export interface FoodItem {
   is_popular?: boolean;
 }
 
-export interface CartItem {
-  food: FoodItem;
-  quantity: number;
-  instructions?: string;
-}
-
 export interface OrderItem {
-  food_id: string;
+  id: string;
   name: string;
   price: number;
   quantity: number;
-  instructions?: string;
+  image_url: string;
 }
 
 export interface Order {
@@ -62,93 +54,30 @@ export interface Order {
   subtotal: number;
   delivery_fee: number;
   total: number;
-  status: 'placed' | 'accepted' | 'preparing' | 'ready' | 'picked_up' | 'out_for_delivery' | 'delivered' | 'cancelled';
-  payment_method: 'cod' | 'online';
+  status: 'placed' | 'confirmed' | 'preparing' | 'out_for_delivery' | 'delivered' | 'cancelled';
+  payment_method: 'cod' | 'bkash' | 'card';
   payment_status: 'pending' | 'paid';
-  rider_id?: string;
-  rider_name?: string;
-  rider_phone?: string;
-  notes?: string;
+  prep_minutes?: number;
   created_at: string;
   updated_at: string;
-  estimated_delivery_time?: string;
 }
 
 export interface Rider {
   id: string;
   name: string;
   phone: string;
-  telegram_chat_id?: string;
   is_online: boolean;
-  current_location: string;
   total_deliveries: number;
   total_earnings: number;
-  status: 'available' | 'busy' | 'offline';
-  rating: number;
+  current_location: string;
 }
 
-export interface Vendor {
-  id: string;
-  restaurant_id: string;
-  name: string;
-  phone: string;
-  telegram_chat_id?: string;
-  email: string;
-  is_active: boolean;
-}
-
-export interface TelegramMessage {
+export interface BotMessage {
   id: string;
   botType: 'rider' | 'vendor';
   chatId: string;
-  sender: 'bot' | 'user';
+  sender: 'user' | 'bot';
   text: string;
   inlineButtons?: { text: string; callbackData: string }[][];
   timestamp: string;
-}
-
-export interface AdminStats {
-  totalOrders: number;
-  activeOrders: number;
-  deliveredOrders: number;
-  totalGMV: number;
-  platformCommission: number;
-  totalRestaurants: number;
-  openRestaurants: number;
-  totalRiders: number;
-  onlineRiders: number;
-  totalVendors: number;
-  dbStatus: {
-    initialized: boolean;
-    usingPostgres: boolean;
-    tablesCreated: string[];
-    bucketCreated: boolean;
-    error: string | null;
-    lastChecked: string;
-  };
-  pingStats: PingStats;
-}
-
-export interface PingStats {
-  status: 'healthy' | 'degraded';
-  uptimeSeconds: number;
-  uptimeFormatted: string;
-  totalPingsReceived: number;
-  lastPingAt: string;
-  serverTime: string;
-  environment: string;
-  memoryUsageMb: {
-    rss: number;
-    heapTotal: number;
-    heapUsed: number;
-  };
-  selfHeartbeatEnabled: boolean;
-  nextScheduledPingInSeconds: number;
-}
-
-export interface PingLog {
-  timestamp: string;
-  source: string;
-  status: number;
-  durationMs: number;
 }

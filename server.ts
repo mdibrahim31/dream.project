@@ -4,7 +4,6 @@ import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { apiRouter } from './server/routes.js';
 import { initDatabase } from './server/db.js';
-import { startSelfHeartbeat } from './server/ping.js';
 
 async function startServer() {
   const app = express();
@@ -12,14 +11,11 @@ async function startServer() {
 
   // Middlewares
   app.use(cors());
-  app.use(express.json({ limit: '15mb' }));
-  app.use(express.urlencoded({ extended: true, limit: '15mb' }));
+  app.use(express.json({ limit: '20mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
-  // Auto initialize Database on boot
+  // Initialize Database on boot
   await initDatabase();
-
-  // Start keep-alive self heartbeat loop (keeps Render free tier active 24/7)
-  startSelfHeartbeat();
 
   // Mount API router
   app.use('/api', apiRouter);
@@ -40,9 +36,8 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 FoodFlow Core Server is live on http://0.0.0.0:${PORT}`);
-    console.log(`📡 Ping endpoint: http://0.0.0.0:${PORT}/api/ping (Use in UptimeRobot)`);
-    console.log(`🤖 Telegram Webhook endpoints ready: /api/telegram/rider-bot & /api/telegram/vendor-bot`);
+    console.log(`🚀 FoodFlow Central Server is live on http://0.0.0.0:${PORT}`);
+    console.log(`📡 API endpoint: http://0.0.0.0:${PORT}/api`);
   });
 }
 
